@@ -17,7 +17,17 @@ import {
   PiggyBank,
   LayoutGrid,
   Search,
-  Fish,
+  Landmark,
+  Building2,
+  Lock,
+  Unlock,
+  KeyRound,
+  Eye,
+  EyeOff,
+  LogOut,
+  ShieldCheck,
+  ArrowRight,
+  Delete,
 } from "lucide-react";
 
 type Category = {
@@ -30,8 +40,9 @@ type Category = {
 const SHEET_ID = process.env.NEXT_PUBLIC_SHEET_ID || "1A1EyNWfj7BR8T3O-HOnRteTNvnnnIPGH4L0tdIEQx3E";
 const CATEGORY_RANGE = "Categories!A2:D";
 const TRANSACTION_RANGE = "Transactions!A2:F";
-const BNI_TRANSACTION_RANGE = "Tabungan BNI!A2:E";
-const IKAN_TRANSACTION_RANGE = "Ikan!A2:E";
+const SEABANK_TRANSACTION_RANGE = "Tabungan BNI!A2:E";
+const BNI_TRANSACTION_RANGE = "Ikan!A2:E";
+const CORRECT_PASSWORD = "060924";
 
 type Transaction = {
   id: number;
@@ -42,7 +53,7 @@ type Transaction = {
   description: string;
 };
 
-type BNITransaction = {
+type BankTransaction = {
   id: number;
   amount: number;
   type: "in" | "out";
@@ -69,23 +80,13 @@ const formatRupiah = (value: number) =>
   new Intl.NumberFormat("id-ID", {
     style: "currency",
     currency: "IDR",
-    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(value);
 
-function Card({
-  children,
-  className = "",
-  onClick,
-}: {
-  children: ReactNode;
-  className?: string;
-  onClick?: () => void;
-}) {
+function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
-      onClick={onClick}
-      className={`bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-5 ${className}`}
+      className={`bg-white dark:bg-slate-800 rounded-2xl p-4 sm:p-6 shadow-sm border border-slate-100 dark:border-slate-700/60 transition-all ${className}`}
     >
       {children}
     </div>
@@ -94,32 +95,37 @@ function Card({
 
 function Button({
   children,
-  variant = "primary",
   onClick,
+  variant = "primary",
+  size = "md",
   className = "",
   type = "button",
 }: {
   children: ReactNode;
-  variant?: "primary" | "secondary" | "danger" | "outline";
   onClick?: () => void;
+  variant?: "primary" | "secondary" | "danger" | "outline" | "ghost";
+  size?: "sm" | "md" | "lg";
   className?: string;
   type?: "button" | "submit" | "reset";
 }) {
+  const base = "inline-flex items-center justify-center font-medium transition-colors rounded-xl focus:outline-none";
+
+  const sizes = {
+    sm: "px-2.5 py-1.5 text-xs gap-1.5",
+    md: "px-4 py-2 text-sm gap-2",
+    lg: "px-6 py-3 text-base gap-2.5",
+  };
+
   const variants = {
-    primary: "bg-blue-600 hover:bg-blue-700 text-white",
-    secondary:
-      "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600",
-    danger: "bg-red-500 hover:bg-red-600 text-white",
-    outline:
-      "border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800",
+    primary: "bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20",
+    secondary: "bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100",
+    danger: "bg-red-500 hover:bg-red-600 text-white shadow-md shadow-red-500/20",
+    outline: "border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300",
+    ghost: "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400",
   };
 
   return (
-    <button
-      type={type}
-      onClick={onClick}
-      className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 ${variants[variant]} ${className}`}
-    >
+    <button type={type} onClick={onClick} className={`${base} ${sizes[size]} ${variants[variant]} ${className}`}>
       {children}
     </button>
   );
@@ -127,9 +133,16 @@ function Button({
 
 export default function Home() {
   const [darkMode, setDarkMode] = useState(true);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "history" | "bni-history" | "ikan-history">("dashboard");
-  const [categories, setCategories] = useState<Category[]>([]);
+  
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginError, setLoginError] = useState(false);
+  const [shake, setShake] = useState(false);
 
+  const [activeTab, setActiveTab] = useState<"dashboard" | "history" | "seabank-history" | "bni-history">("dashboard");
+  const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
@@ -155,25 +168,77 @@ export default function Home() {
     target: "",
   });
 
+  // SeaBank Savings state (reads from sheet 'Tabungan BNI')
+  const [seabankBalance, setSeabankBalance] = useState(0);
+  const [isSeabankModalOpen, setIsSeabankModalOpen] = useState(false);
+  const [editingSeabankTx, setEditingSeabankTx] = useState<BankTransaction | null>(null);
+  const [seabankAmountInput, setSeabankAmountInput] = useState("");
+  const [seabankTransactions, setSeabankTransactions] = useState<BankTransaction[]>([]);
+  const [seabankSheetRange, setSeabankSheetRange] = useState("Tabungan BNI!A2:E");
+  const [seabankForm, setSeabankForm] = useState({
+    type: "in" as "in" | "out",
+    description: "",
+    date: new Date().toISOString().split("T")[0],
+  });
+
+  // BNI Savings state (reads from sheet 'Ikan', displayed as Tabungan BNI)
   const [bniBalance, setBniBalance] = useState(0);
   const [isBniModalOpen, setIsBniModalOpen] = useState(false);
+  const [editingBniTx, setEditingBniTx] = useState<BankTransaction | null>(null);
   const [bniAmountInput, setBniAmountInput] = useState("");
-  const [bniTransactions, setBniTransactions] = useState<BNITransaction[]>([]);
+  const [bniTransactions, setBniTransactions] = useState<BankTransaction[]>([]);
+  const [bniSheetRange, setBniSheetRange] = useState("Ikan!A2:E");
   const [bniForm, setBniForm] = useState({
     type: "in" as "in" | "out",
     description: "",
     date: new Date().toISOString().split("T")[0],
   });
 
-  const [ikanBalance, setIkanBalance] = useState(0);
-  const [isIkanModalOpen, setIsIkanModalOpen] = useState(false);
-  const [ikanAmountInput, setIkanAmountInput] = useState("");
-  const [ikanTransactions, setIkanTransactions] = useState<BNITransaction[]>([]);
-  const [ikanForm, setIkanForm] = useState({
-    type: "in" as "in" | "out",
-    description: "",
-    date: new Date().toISOString().split("T")[0],
-  });
+  useEffect(() => {
+    const authStatus = localStorage.getItem("tabunganku_auth");
+    if (authStatus === "true") {
+      setIsAuthenticated(true);
+      void loadFromSheets();
+    } else {
+      setIsAuthenticated(false);
+    }
+  }, []);
+
+  const handleLogin = (pwd: string) => {
+    if (pwd === CORRECT_PASSWORD) {
+      localStorage.setItem("tabunganku_auth", "true");
+      setIsAuthenticated(true);
+      setLoginError(false);
+      void loadFromSheets();
+    } else {
+      setLoginError(true);
+      setShake(true);
+      setTimeout(() => setShake(false), 600);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("tabunganku_auth");
+    setIsAuthenticated(false);
+    setPasswordInput("");
+    setLoginError(false);
+  };
+
+  const handleNumpadClick = (val: string) => {
+    if (passwordInput.length < 10) {
+      const nextPwd = passwordInput + val;
+      setPasswordInput(nextPwd);
+      setLoginError(false);
+      if (nextPwd.length === 6) {
+        handleLogin(nextPwd);
+      }
+    }
+  };
+
+  const handleNumpadDelete = () => {
+    setPasswordInput((prev) => prev.slice(0, -1));
+    setLoginError(false);
+  };
 
   const toNumber = (value: string | number | undefined, fallback = 0) => {
     if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
@@ -248,9 +313,9 @@ export default function Home() {
     await writeValues(TRANSACTION_RANGE, rows);
   };
 
-  const parseBniTransactions = (rows: string[][]): BNITransaction[] => {
+  const parseBankTransactions = (rows: string[][]): BankTransaction[] => {
     const used = new Set<number>();
-    const parsed: BNITransaction[] = [];
+    const parsed: BankTransaction[] = [];
     rows.forEach((row, index) => {
       let id = toNumber(row[0], index + 1);
       if (id < 1) id = index + 1;
@@ -265,53 +330,80 @@ export default function Home() {
     return parsed;
   };
 
-  const saveBniTransactions = async (data: BNITransaction[]) => {
+  const saveSeabankTransactions = async (data: BankTransaction[]) => {
     const rows = data.map((tx) => [tx.id, tx.amount, tx.type, tx.date, tx.description]);
-    await writeValues(BNI_TRANSACTION_RANGE, rows);
+    await writeValues(seabankSheetRange || SEABANK_TRANSACTION_RANGE, rows);
   };
 
-  const saveIkanTransactions = async (data: BNITransaction[]) => {
+  const saveBniTransactions = async (data: BankTransaction[]) => {
     const rows = data.map((tx) => [tx.id, tx.amount, tx.type, tx.date, tx.description]);
-    await writeValues(IKAN_TRANSACTION_RANGE, rows);
+    await writeValues(bniSheetRange || BNI_TRANSACTION_RANGE, rows);
   };
 
   const loadFromSheets = async () => {
-    const [catRows, txRows, bniRows, ikanRows] = await Promise.all([
+    const fetchSeabankData = async (): Promise<{ rows: string[][]; range: string }> => {
+      const bniRows = await fetchValues("Tabungan BNI!A2:E1000");
+      if (bniRows.length > 0) {
+        return { rows: bniRows, range: "Tabungan BNI!A2:E" };
+      }
+      const tabunganSeaBankRows = await fetchValues("Tabungan SeaBank!A2:E1000");
+      if (tabunganSeaBankRows.length > 0) {
+        return { rows: tabunganSeaBankRows, range: "Tabungan SeaBank!A2:E" };
+      }
+      const tabunganSeabankRows = await fetchValues("Tabungan Seabank!A2:E1000");
+      if (tabunganSeabankRows.length > 0) {
+        return { rows: tabunganSeabankRows, range: "Tabungan Seabank!A2:E" };
+      }
+      const seabankRows = await fetchValues("Seabank!A2:E1000");
+      if (seabankRows.length > 0) {
+        return { rows: seabankRows, range: "Seabank!A2:E" };
+      }
+      return { rows: [], range: "Tabungan BNI!A2:E" };
+    };
+
+    const fetchBniData = async (): Promise<{ rows: string[][]; range: string }> => {
+      const ikanRows = await fetchValues("Ikan!A2:E1000");
+      if (ikanRows.length > 0) {
+        return { rows: ikanRows, range: "Ikan!A2:E" };
+      }
+      return { rows: [], range: "Ikan!A2:E" };
+    };
+
+    const [catRows, txRows, seabankResult, bniResult] = await Promise.all([
       fetchValues("Categories!A2:D1000"),
       fetchValues("Transactions!A2:F1000"),
-      fetchValues("Tabungan BNI!A2:E1000"),
-      fetchValues("Ikan!A2:E1000"),
+      fetchSeabankData(),
+      fetchBniData(),
     ]);
+
     const parsedCategories = parseCategories(catRows);
     const validCategoryIds = new Set(parsedCategories.map((cat) => cat.id));
     const parsedTransactions = parseTransactions(txRows, validCategoryIds);
-    const parsedBniTransactions = parseBniTransactions(bniRows);
-    const parsedIkanTransactions = parseBniTransactions(ikanRows);
+    const parsedSeabankTransactions = parseBankTransactions(seabankResult.rows);
+    const parsedBniTransactions = parseBankTransactions(bniResult.rows);
     
     setCategories(parsedCategories);
     setTransactions(parsedTransactions);
+    setSeabankTransactions(parsedSeabankTransactions);
+    setSeabankSheetRange(seabankResult.range);
     setBniTransactions(parsedBniTransactions);
-    setIkanTransactions(parsedIkanTransactions);
+    setBniSheetRange(bniResult.range);
     
-    // Calculate BNI balance from transactions
-    const bniBalance = parsedBniTransactions.reduce((acc, tx) => {
+    // Calculate SeaBank balance from transactions (from Tabungan BNI sheet)
+    const seabankBal = parsedSeabankTransactions.reduce((acc, tx) => {
       return acc + (tx.type === "in" ? tx.amount : -tx.amount);
     }, 0);
-    setBniBalance(bniBalance);
+    setSeabankBalance(seabankBal);
 
-    // Calculate IKAN balance from transactions
-    const ikanBalance = parsedIkanTransactions.reduce((acc, tx) => {
+    // Calculate BNI balance from transactions (from Ikan sheet)
+    const bniBal = parsedBniTransactions.reduce((acc, tx) => {
       return acc + (tx.type === "in" ? tx.amount : -tx.amount);
     }, 0);
-    setIkanBalance(ikanBalance);
+    setBniBalance(bniBal);
     
     const firstCategoryId = parsedCategories[0]?.id ?? "";
     setTxForm((prev) => ({ ...prev, categoryId: firstCategoryId }));
   };
-
-  useEffect(() => {
-    void loadFromSheets();
-  }, []);
 
   const getNextCategoryId = () => {
     const used = new Set(categories.map((cat) => cat.id));
@@ -436,39 +528,58 @@ export default function Home() {
         color: randomColor,
         target: catForm.target ? Number(catForm.target) : 0,
       };
-
       setCategories((prev) => {
         const updated = [...prev, newCat];
         void saveCategories(updated);
         return updated;
       });
-      setTxForm((prev) => ({ ...prev, categoryId: newCat.id }));
     }
 
-    setCatForm({ name: "", target: "" });
-    setIsCatModalOpen(false);
+    closeCatModal();
+  };
+
+  const handleDeleteCategory = (id: number) => {
+    if (window.confirm("Yakin ingin menghapus pos tabungan ini? Transaksi terkait juga akan dihapus.")) {
+      setCategories((prev) => {
+        const updated = prev.filter((cat) => cat.id !== id);
+        void saveCategories(updated);
+        return updated;
+      });
+      setTransactions((prev) => {
+        const updated = prev.filter((tx) => tx.categoryId !== id);
+        void saveTransactions(updated);
+        return updated;
+      });
+    }
   };
 
   const handleEditCategory = (cat: Category) => {
     setEditingCat(cat);
-    setCatForm({ name: cat.name, target: cat.target ? String(cat.target) : "" });
+    setCatForm({
+      name: cat.name,
+      target: cat.target ? cat.target.toString() : "",
+    });
     setIsCatModalOpen(true);
   };
 
-  const handleDeleteCategory = (id: number) => {
-    if (!window.confirm("Hapus kategori ini? Semua transaksi di kategori ini akan dihapus.")) return;
-    const updatedCats = categories.filter((cat) => cat.id !== id);
-    const updatedTx = transactions.filter((tx) => tx.categoryId !== id);
-    setCategories(updatedCats);
-    setTransactions(updatedTx);
-    const nextCatId = updatedCats[0]?.id ?? "";
-    setTxForm((prev) => ({ ...prev, categoryId: nextCatId }));
-    void saveCategories(updatedCats);
-    void saveTransactions(updatedTx);
-    setEditingCat(null);
+  const openTxModal = (catId?: number, type: "in" | "out" = "in") => {
+    setEditingTx(null);
+    setTxForm({
+      categoryId: catId || categories[0]?.id || "",
+      amount: "",
+      type: type,
+      description: "",
+      date: new Date().toISOString().split("T")[0],
+    });
+    setIsTxModalOpen(true);
   };
 
-  const openNewCategoryModal = () => {
+  const closeTxModal = () => {
+    setIsTxModalOpen(false);
+    setEditingTx(null);
+  };
+
+  const openCatModal = () => {
     setEditingCat(null);
     setCatForm({ name: "", target: "" });
     setIsCatModalOpen(true);
@@ -477,24 +588,134 @@ export default function Home() {
   const closeCatModal = () => {
     setIsCatModalOpen(false);
     setEditingCat(null);
-    setCatForm({ name: "", target: "" });
   };
 
-  const openTxModal = (preSelectedCategoryId: number | "" = "") => {
-    setTxForm({
-      categoryId: preSelectedCategoryId || categories[0]?.id || "",
-      amount: "",
+  // SeaBank handlers
+  const openSeabankModal = () => {
+    setEditingSeabankTx(null);
+    setSeabankAmountInput("");
+    setSeabankForm({
       type: "in",
       description: "",
       date: new Date().toISOString().split("T")[0],
     });
-    setEditingTx(null);
-    setIsTxModalOpen(true);
+    setIsSeabankModalOpen(true);
   };
 
-  const closeTxModal = () => {
-    setIsTxModalOpen(false);
-    setEditingTx(null);
+  const handleEditSeabankTransaction = (tx: BankTransaction) => {
+    setEditingSeabankTx(tx);
+    setSeabankAmountInput(tx.amount.toString());
+    setSeabankForm({
+      type: tx.type,
+      description: tx.description,
+      date: tx.date,
+    });
+    setIsSeabankModalOpen(true);
+  };
+
+  const handleSaveSeabankTransaction = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const amount = Number(seabankAmountInput.replace(/\D/g, ""));
+    if (amount <= 0) return;
+
+    if (editingSeabankTx) {
+      const updated = seabankTransactions.map((t) =>
+        t.id === editingSeabankTx.id
+          ? {
+              ...t,
+              amount,
+              type: seabankForm.type,
+              description: seabankForm.description,
+              date: seabankForm.date,
+            }
+          : t
+      );
+      setSeabankTransactions(updated);
+      const newBalance = updated.reduce((acc, tx) => acc + (tx.type === "in" ? tx.amount : -tx.amount), 0);
+      setSeabankBalance(newBalance);
+      void saveSeabankTransactions(updated);
+      setEditingSeabankTx(null);
+    } else {
+      const newTx: BankTransaction = {
+        id: Date.now(),
+        amount,
+        type: seabankForm.type,
+        description: seabankForm.description,
+        date: seabankForm.date,
+      };
+      const updated = [newTx, ...seabankTransactions];
+      setSeabankTransactions(updated);
+      const newBalance = updated.reduce((acc, tx) => acc + (tx.type === "in" ? tx.amount : -tx.amount), 0);
+      setSeabankBalance(newBalance);
+      void saveSeabankTransactions(updated);
+    }
+    setIsSeabankModalOpen(false);
+    setSeabankAmountInput("");
+    setSeabankForm({ type: "in", description: "", date: new Date().toISOString().split("T")[0] });
+  };
+
+  // BNI handlers
+  const openBniModal = () => {
+    setEditingBniTx(null);
+    setBniAmountInput("");
+    setBniForm({
+      type: "in",
+      description: "",
+      date: new Date().toISOString().split("T")[0],
+    });
+    setIsBniModalOpen(true);
+  };
+
+  const handleEditBniTransaction = (tx: BankTransaction) => {
+    setEditingBniTx(tx);
+    setBniAmountInput(tx.amount.toString());
+    setBniForm({
+      type: tx.type,
+      description: tx.description,
+      date: tx.date,
+    });
+    setIsBniModalOpen(true);
+  };
+
+  const handleSaveBniTransaction = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const amount = Number(bniAmountInput.replace(/\D/g, ""));
+    if (amount <= 0) return;
+
+    if (editingBniTx) {
+      const updated = bniTransactions.map((t) =>
+        t.id === editingBniTx.id
+          ? {
+              ...t,
+              amount,
+              type: bniForm.type,
+              description: bniForm.description,
+              date: bniForm.date,
+            }
+          : t
+      );
+      setBniTransactions(updated);
+      const newBalance = updated.reduce((acc, tx) => acc + (tx.type === "in" ? tx.amount : -tx.amount), 0);
+      setBniBalance(newBalance);
+      void saveBniTransactions(updated);
+      setEditingBniTx(null);
+    } else {
+      const newTx: BankTransaction = {
+        id: Date.now(),
+        amount,
+        type: bniForm.type,
+        description: bniForm.description,
+        date: bniForm.date,
+      };
+      const updated = [newTx, ...bniTransactions];
+      setBniTransactions(updated);
+      const newBalance = updated.reduce((acc, tx) => acc + (tx.type === "in" ? tx.amount : -tx.amount), 0);
+      setBniBalance(newBalance);
+      void saveBniTransactions(updated);
+    }
+    setIsBniModalOpen(false);
+    setBniAmountInput("");
+    setBniForm({ type: "in", description: "", date: new Date().toISOString().split("T")[0] });
   };
 
   const getCategoryName = (id: number) => categories.find((c) => c.id === id)?.name || "Dihapus";
@@ -517,13 +738,185 @@ export default function Home() {
         getCategoryName(tx.categoryId).toLowerCase().includes(lowerQuery) ||
         formatRupiah(tx.amount).toLowerCase().includes(lowerQuery)
     );
-  }, [searchQuery, sortedTransactions, getCategoryName]);
+  }, [searchQuery, sortedTransactions, categories]);
 
+  // Loading state while checking localStorage
+  if (isAuthenticated === null) {
+    return (
+      <div className={`min-h-screen ${darkMode ? "dark bg-slate-900" : "bg-slate-50"} flex items-center justify-center`}>
+        <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  // LOGIN SCREEN
+  if (!isAuthenticated) {
+    return (
+      <div className={`${darkMode ? "dark" : ""} transition-colors duration-300 w-full min-h-screen flex items-center justify-center p-4 bg-slate-900 text-slate-100 relative overflow-hidden font-sans`}>
+        {/* Animated ambient background lights */}
+        <div className="absolute -top-40 -left-40 w-96 h-96 bg-blue-600/30 rounded-full blur-3xl pointer-events-none animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-purple-600/25 rounded-full blur-3xl pointer-events-none animate-pulse" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-teal-500/15 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Top bar controls */}
+        <div className="absolute top-4 right-4 z-10">
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-2.5 rounded-full bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 transition-colors backdrop-blur-md"
+            title="Ganti Tema"
+          >
+            {darkMode ? <Sun size={18} className="text-yellow-400" /> : <Moon size={18} className="text-slate-300" />}
+          </button>
+        </div>
+
+        {/* Main Login Card */}
+        <div className={`w-full max-w-md bg-slate-800/80 backdrop-blur-2xl rounded-3xl p-6 sm:p-8 border border-slate-700/70 shadow-2xl relative z-10 ${shake ? "animate-bounce" : "animate-in fade-in zoom-in-95 duration-300"}`}>
+          
+          {/* Logo & Lock Badge */}
+          <div className="flex flex-col items-center text-center mb-6">
+            <div className="relative mb-4">
+              <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <Wallet className="w-10 h-10 text-white" />
+              </div>
+              <div className="absolute -bottom-1 -right-1 p-1.5 rounded-full bg-slate-900 border-2 border-slate-800 text-blue-400">
+                <Lock size={16} />
+              </div>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
+              TabunganKu
+            </h2>
+            <p className="text-sm text-slate-400 mt-1.5 flex items-center gap-1.5">
+              <KeyRound size={14} className="text-blue-400" /> Masukkan Password untuk Membuka
+            </p>
+          </div>
+
+          {/* Form */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleLogin(passwordInput);
+            }}
+            className="space-y-5"
+          >
+            <div>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoFocus
+                  required
+                  placeholder="Ketik password..."
+                  value={passwordInput}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPasswordInput(val);
+                    setLoginError(false);
+                    if (val.length === 6) {
+                      handleLogin(val);
+                    }
+                  }}
+                  className={`w-full py-3.5 px-4 pr-12 rounded-2xl bg-slate-900/90 border text-center text-xl tracking-widest font-mono text-white placeholder-slate-500 focus:outline-none transition-all ${
+                    loginError
+                      ? "border-red-500/80 focus:border-red-500 focus:ring-2 focus:ring-red-500/30"
+                      : "border-slate-700/80 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30"
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors p-1"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+
+              {loginError && (
+                <p className="text-red-400 text-xs text-center mt-2 font-medium flex items-center justify-center gap-1 animate-pulse">
+                  <X size={14} /> Password salah! Silakan coba lagi.
+                </p>
+              )}
+            </div>
+
+            {/* Quick PIN indicator dots (6 digits) */}
+            <div className="flex justify-center items-center gap-2.5 py-1">
+              {[0, 1, 2, 3, 4, 5].map((index) => {
+                const isFilled = passwordInput.length > index;
+                return (
+                  <div
+                    key={index}
+                    className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
+                      isFilled
+                        ? "bg-blue-500 scale-110 shadow-md shadow-blue-500/50"
+                        : "bg-slate-700/80 border border-slate-600"
+                    }`}
+                  />
+                );
+              })}
+            </div>
+
+            {/* On-screen Numpad */}
+            <div className="grid grid-cols-3 gap-2.5 pt-1">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((num) => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => handleNumpadClick(num)}
+                  className="py-3.5 rounded-2xl bg-slate-900/60 hover:bg-slate-700/70 active:bg-blue-600/50 border border-slate-700/50 text-xl font-bold font-mono text-slate-100 transition-all shadow-sm active:scale-95 flex items-center justify-center"
+                >
+                  {num}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setPasswordInput("")}
+                className="py-3.5 rounded-2xl bg-slate-900/40 hover:bg-red-500/20 active:bg-red-500/30 border border-slate-700/40 text-xs font-semibold text-slate-400 hover:text-red-400 transition-all active:scale-95 flex items-center justify-center"
+              >
+                CLEAR
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNumpadClick("0")}
+                className="py-3.5 rounded-2xl bg-slate-900/60 hover:bg-slate-700/70 active:bg-blue-600/50 border border-slate-700/50 text-xl font-bold font-mono text-slate-100 transition-all shadow-sm active:scale-95 flex items-center justify-center"
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={handleNumpadDelete}
+                className="py-3.5 rounded-2xl bg-slate-900/60 hover:bg-slate-700/70 active:bg-slate-600/50 border border-slate-700/50 text-slate-300 transition-all shadow-sm active:scale-95 flex items-center justify-center"
+              >
+                <Delete size={20} />
+              </button>
+            </div>
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:via-indigo-500 hover:to-purple-500 text-white font-bold text-base shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+            >
+              <Unlock size={18} /> Masuk ke Aplikasi
+            </button>
+          </form>
+
+          {/* Footer note */}
+          <div className="mt-6 text-center">
+            <p className="text-xs text-slate-500 flex items-center justify-center gap-1">
+              <ShieldCheck size={14} className="text-green-500" /> Akses Terenkripsi & Aman
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // MAIN DASHBOARD (AUTHENTICATED)
   return (
-    <div className={`${darkMode ? "dark" : ""} transition-colors duration-300`}>
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 pb-20 md:pb-10 font-sans">
+    <div className={`${darkMode ? "dark" : ""} transition-colors duration-300 w-full overflow-x-hidden`}>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 pb-20 md:pb-10 font-sans w-full overflow-x-hidden">
         <nav className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-10 px-4 py-3 shadow-sm">
-          <div className="max-w-3xl mx-auto flex justify-between items-center">
+          <div className="max-w-3xl lg:max-w-4xl mx-auto flex justify-between items-center">
             <div className="flex items-center gap-2">
               <div className="bg-blue-600 p-2 rounded-lg text-white shrink-0">
                 <Wallet size={20} />
@@ -546,8 +939,17 @@ export default function Home() {
               <button
                 onClick={() => setDarkMode(!darkMode)}
                 className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0"
+                title="Ganti Tema"
               >
                 {darkMode ? <Sun size={18} className="text-yellow-500" /> : <Moon size={18} className="text-slate-600" />}
+              </button>
+
+              <button
+                onClick={handleLogout}
+                className="p-2 rounded-full hover:bg-red-50 dark:hover:bg-red-900/30 text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors shrink-0"
+                title="Kunci Aplikasi / Keluar"
+              >
+                <LogOut size={18} />
               </button>
             </div>
           </div>
@@ -555,6 +957,7 @@ export default function Home() {
 
         <main className="max-w-3xl lg:max-w-4xl mx-auto p-4 space-y-6">
           <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Card 1: Total Semua Tabungan */}
             <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
               <div className="absolute top-0 right-0 p-4 opacity-10">
                 <PiggyBank size={100} />
@@ -571,18 +974,16 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Card 2: TABUNGAN SEABANK */}
             <div className="bg-gradient-to-br from-orange-500 to-orange-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
               <div className="absolute top-0 right-0 p-4 opacity-10">
-                <PiggyBank size={100} />
+                <Landmark size={100} />
               </div>
-              <p className="text-orange-100 font-medium mb-1">TABUNGAN BNI</p>
-              <h2 className="text-3xl md:text-4xl font-bold">{formatRupiah(bniBalance)}</h2>
+              <p className="text-orange-100 font-medium mb-1">TABUNGAN SEABANK</p>
+              <h2 className="text-3xl md:text-4xl font-bold">{formatRupiah(seabankBalance)}</h2>
               <div className="mt-6 flex gap-3">
                 <button
-                  onClick={() => {
-                    setBniAmountInput("");
-                    setIsBniModalOpen(true);
-                  }}
+                  onClick={openSeabankModal}
                   className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border border-white/40 rounded-lg px-4 py-2 flex items-center gap-2 text-sm font-semibold transition-all"
                 >
                   <Plus size={16} /> Tambah Saldo
@@ -590,18 +991,16 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-teal-500 to-teal-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
+            {/* Card 3: TABUNGAN BNI */}
+            <div className="bg-gradient-to-br from-teal-600 to-teal-800 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
               <div className="absolute top-0 right-0 p-4 opacity-10">
-                <Fish size={100} />
+                <Building2 size={100} />
               </div>
-              <p className="text-teal-100 font-medium mb-1">TABUNGAN IKAN</p>
-              <h2 className="text-3xl md:text-4xl font-bold">{formatRupiah(ikanBalance)}</h2>
+              <p className="text-teal-100 font-medium mb-1">TABUNGAN BNI</p>
+              <h2 className="text-3xl md:text-4xl font-bold">{formatRupiah(bniBalance)}</h2>
               <div className="mt-6 flex gap-3">
                 <button
-                  onClick={() => {
-                    setIkanAmountInput("");
-                    setIsIkanModalOpen(true);
-                  }}
+                  onClick={openBniModal}
                   className="bg-white/20 hover:bg-white/30 backdrop-blur-sm border border-white/40 rounded-lg px-4 py-2 flex items-center gap-2 text-sm font-semibold transition-all"
                 >
                   <Plus size={16} /> Tambah Saldo
@@ -638,13 +1037,14 @@ export default function Home() {
             </div>
           </Card>
 
-          <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700 pb-1">
+          {/* Tab Navigation */}
+          <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700 pb-0 overflow-x-auto custom-scrollbar">
             <button
               onClick={() => setActiveTab("dashboard")}
-              className={`pb-2 px-4 font-medium text-sm transition-colors relative ${
+              className={`pb-2 px-3 sm:px-4 font-medium text-sm transition-colors relative shrink-0 whitespace-nowrap ${
                 activeTab === "dashboard"
-                  ? "text-blue-600 dark:text-blue-400"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "text-blue-600 dark:text-blue-400 font-semibold"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               }`}
             >
               <span className="flex items-center gap-2">
@@ -654,12 +1054,13 @@ export default function Home() {
                 <div className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 dark:bg-blue-400 rounded-t-full" />
               )}
             </button>
+
             <button
               onClick={() => setActiveTab("history")}
-              className={`pb-2 px-4 font-medium text-sm transition-colors relative ${
+              className={`pb-2 px-3 sm:px-4 font-medium text-sm transition-colors relative shrink-0 whitespace-nowrap ${
                 activeTab === "history"
-                  ? "text-blue-600 dark:text-blue-400"
-                  : "text-slate-500 hover:text-slate-700"
+                  ? "text-blue-600 dark:text-blue-400 font-semibold"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               }`}
             >
               <span className="flex items-center gap-2">
@@ -669,38 +1070,41 @@ export default function Home() {
                 <div className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 dark:bg-blue-400 rounded-t-full" />
               )}
             </button>
+
             <button
-              onClick={() => setActiveTab("bni-history")}
-              className={`pb-2 px-4 font-medium text-sm transition-colors relative ${
-                activeTab === "bni-history"
-                  ? "text-orange-600 dark:text-orange-400"
-                  : "text-slate-500 hover:text-slate-700"
+              onClick={() => setActiveTab("seabank-history")}
+              className={`pb-2 px-3 sm:px-4 font-medium text-sm transition-colors relative shrink-0 whitespace-nowrap ${
+                activeTab === "seabank-history"
+                  ? "text-orange-600 dark:text-orange-400 font-semibold"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               }`}
             >
               <span className="flex items-center gap-2">
-                <PiggyBank size={16} /> Riwayat BNI
+                <Landmark size={16} /> Riwayat SeaBank
               </span>
-              {activeTab === "bni-history" && (
+              {activeTab === "seabank-history" && (
                 <div className="absolute bottom-0 left-0 w-full h-0.5 bg-orange-600 dark:bg-orange-400 rounded-t-full" />
               )}
             </button>
+
             <button
-              onClick={() => setActiveTab("ikan-history")}
-              className={`pb-2 px-4 font-medium text-sm transition-colors relative ${
-                activeTab === "ikan-history"
-                  ? "text-teal-600 dark:text-teal-400"
-                  : "text-slate-500 hover:text-slate-700"
+              onClick={() => setActiveTab("bni-history")}
+              className={`pb-2 px-3 sm:px-4 font-medium text-sm transition-colors relative shrink-0 whitespace-nowrap ${
+                activeTab === "bni-history"
+                  ? "text-teal-600 dark:text-teal-400 font-semibold"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               }`}
             >
               <span className="flex items-center gap-2">
-                <Fish size={16} /> Riwayat Ikan
+                <Building2 size={16} /> Riwayat BNI
               </span>
-              {activeTab === "ikan-history" && (
+              {activeTab === "bni-history" && (
                 <div className="absolute bottom-0 left-0 w-full h-0.5 bg-teal-600 dark:bg-teal-400 rounded-t-full" />
               )}
             </button>
           </div>
 
+          {/* TAB 1: KATEGORI DASHBOARD */}
           {activeTab === "dashboard" && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -710,84 +1114,93 @@ export default function Home() {
                   const progress = target > 0 ? Math.min((balance / target) * 100, 100) : 0;
 
                   return (
-                    <Card
-                      key={cat.id}
-                      className="group hover:border-blue-300 dark:hover:border-blue-700 transition-colors relative cursor-pointer"
-                      onClick={() => openTxModal(cat.id)}
-                    >
-                      <div className="flex justify-between items-start mb-3">
-                        <div className={`w-10 h-10 rounded-lg ${cat.color} flex items-center justify-center text-white shadow-sm`}>
-                          <Wallet size={20} />
-                        </div>
-                        <div className="absolute top-4 right-4 flex gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEditCategory(cat);
-                            }}
-                            className="bg-blue-50 dark:bg-slate-700 p-1.5 rounded-md text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-slate-600"
-                            aria-label="Edit kategori"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteCategory(cat.id);
-                            }}
-                            className="bg-red-50 dark:bg-slate-700 p-1.5 rounded-md text-red-500 hover:bg-red-100 dark:hover:bg-slate-600"
-                            aria-label="Hapus kategori"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      <h3 className="text-slate-500 dark:text-slate-400 text-sm font-medium mb-1 truncate">{cat.name}</h3>
-                      <p className="text-2xl font-bold text-slate-800 dark:text-white mb-2">{formatRupiah(balance)}</p>
-
-                      {target > 0 && (
-                        <div className="mt-2">
-                          <div className="flex justify-between text-[10px] text-slate-500 dark:text-slate-400 mb-1">
-                            <span>Tercapai: {Math.round(progress)}%</span>
-                            <span>
-                              Target: {new Intl.NumberFormat("id-ID", { compactDisplay: "short", notation: "compact" }).format(target)}
-                            </span>
+                    <Card key={cat.id} className="relative overflow-hidden group">
+                      <div className={`absolute top-0 left-0 w-2 h-full ${cat.color}`} />
+                      <div className="pl-2">
+                        <div className="flex justify-between items-start mb-2">
+                          <h4 className="font-semibold text-lg">{cat.name}</h4>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleEditCategory(cat)}
+                              className="p-1 text-slate-400 hover:text-blue-500 rounded"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCategory(cat.id)}
+                              className="p-1 text-slate-400 hover:text-red-500 rounded"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </div>
-                          <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
+                        </div>
+
+                        <div className="mb-4">
+                          <p className="text-2xl font-bold font-mono">{formatRupiah(balance)}</p>
+                          {target > 0 && (
+                            <p className="text-xs text-slate-500">
+                              Target: {formatRupiah(target)} ({Math.round(progress)}%)
+                            </p>
+                          )}
+                        </div>
+
+                        {target > 0 && (
+                          <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-1.5 mb-4">
                             <div
-                              className={`${cat.color} h-full rounded-full transition-all duration-700`}
+                              className={`${cat.color} h-1.5 rounded-full transition-all duration-300`}
                               style={{ width: `${progress}%` }}
                             />
                           </div>
+                        )}
+
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="flex-1"
+                            onClick={() => openTxModal(cat.id, "in")}
+                          >
+                            <Plus size={14} /> Nabung
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1"
+                            onClick={() => openTxModal(cat.id, "out")}
+                          >
+                            <Minus size={14} /> Tarik
+                          </Button>
                         </div>
-                      )}
+                      </div>
                     </Card>
                   );
                 })}
 
                 <button
-                  onClick={openNewCategoryModal}
-                  className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-6 flex flex-col items-center justify-center text-slate-400 hover:text-blue-500 hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-slate-800 transition-all min-h-[140px]"
+                  onClick={openCatModal}
+                  className="h-full min-h-[160px] border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-500 dark:hover:border-blue-400 rounded-2xl flex flex-col items-center justify-center p-6 text-slate-400 hover:text-blue-500 dark:hover:text-blue-400 transition-all gap-2 group"
                 >
-                  <Plus size={32} className="mb-2" />
-                  <span className="font-medium">Buat Kategori Baru</span>
+                  <div className="p-3 rounded-full bg-slate-100 dark:bg-slate-800 group-hover:bg-blue-50 dark:group-hover:bg-blue-900/30">
+                    <Plus size={24} />
+                  </div>
+                  <span className="font-medium text-sm">Tambah Kategori Tabungan</span>
                 </button>
               </div>
             </div>
           )}
 
+          {/* TAB 2: RIWAYAT TRANSAKSI KATEGORI */}
           {activeTab === "history" && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
               <Card>
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="font-bold text-lg">Riwayat Mutasi</h3>
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="font-bold text-lg">Semua Transaksi</h3>
                 </div>
 
-                {transactions.length === 0 ? (
+                {sortedTransactions.length === 0 ? (
                   <div className="text-center py-10 text-slate-400">
                     <History size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>Belum ada transaksi tercatat.</p>
+                    <p>Belum ada riwayat transaksi.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -847,23 +1260,28 @@ export default function Home() {
                   </div>
                 )}
               </Card>
+            </div>
+          )}
 
+          {/* TAB 3: RIWAYAT TABUNGAN SEABANK */}
+          {activeTab === "seabank-history" && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
               <Card className="border-orange-200 dark:border-orange-900/50">
                 <div className="mb-4 flex items-center gap-2">
                   <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400">
-                    <PiggyBank size={20} />
+                    <Landmark size={20} />
                   </div>
-                  <h3 className="font-bold text-lg">Riwayat TABUNGAN BNI</h3>
+                  <h3 className="font-bold text-lg">Riwayat TABUNGAN SEABANK</h3>
                 </div>
 
-                {bniTransactions.length === 0 ? (
+                {seabankTransactions.length === 0 ? (
                   <div className="text-center py-10 text-slate-400">
                     <History size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>Belum ada transaksi TABUNGAN BNI tercatat.</p>
+                    <p>Belum ada transaksi TABUNGAN SEABANK tercatat.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {[...bniTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((tx) => (
+                    {[...seabankTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((tx) => (
                       <div
                         key={tx.id}
                         className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all group"
@@ -884,7 +1302,7 @@ export default function Home() {
                             </p>
                             <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
                               <span className="px-2 py-0.5 rounded-md bg-orange-600 text-white bg-opacity-80">
-                                TABUNGAN BNI
+                                TABUNGAN SEABANK
                               </span>
                               <span>• {tx.date}</span>
                             </div>
@@ -901,92 +1319,20 @@ export default function Home() {
                           </span>
                           <div className="flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
-                              onClick={() => {
-                                setBniTransactions((prev) => {
-                                  const updated = prev.filter((t) => t.id !== tx.id);
-                                  void saveBniTransactions(updated);
-                                  const adjustedAmount = tx.type === "in" ? -tx.amount : tx.amount;
-                                  setBniBalance(prev => prev + adjustedAmount);
-                                  return updated;
-                                });
-                              }}
-                              className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-slate-600 rounded"
+                              onClick={() => handleEditSeabankTransaction(tx)}
+                              className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"
                             >
-                              <Trash2 size={16} />
+                              <Edit2 size={16} />
                             </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </div>
-          )}
-
-          {activeTab === "bni-history" && (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-              <Card className="border-orange-200 dark:border-orange-900/50">
-                <div className="mb-4 flex items-center gap-2">
-                  <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400">
-                    <PiggyBank size={20} />
-                  </div>
-                  <h3 className="font-bold text-lg">Riwayat TABUNGAN BNI</h3>
-                </div>
-
-                {bniTransactions.length === 0 ? (
-                  <div className="text-center py-10 text-slate-400">
-                    <History size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>Belum ada transaksi TABUNGAN BNI tercatat.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {[...bniTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((tx) => (
-                      <div
-                        key={tx.id}
-                        className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all group"
-                      >
-                        <div className="flex items-start gap-4 mb-2 sm:mb-0">
-                          <div
-                            className={`p-2 rounded-full ${
-                              tx.type === "in"
-                                ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400"
-                                : "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
-                            }`}
-                          >
-                            {tx.type === "in" ? <Plus size={18} /> : <Minus size={18} />}
-                          </div>
-                          <div>
-                            <p className="font-medium text-slate-800 dark:text-slate-200">
-                              {tx.description || "Tanpa Keterangan"}
-                            </p>
-                            <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                              <span className="px-2 py-0.5 rounded-md bg-orange-600 text-white bg-opacity-80">
-                                TABUNGAN BNI
-                              </span>
-                              <span>• {tx.date}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pl-12 sm:pl-0">
-                          <span
-                            className={`font-bold font-mono ${
-                              tx.type === "in" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"
-                            }`}
-                          >
-                            {tx.type === "in" ? "+" : "-"} {formatRupiah(tx.amount)}
-                          </span>
-                          <div className="flex gap-1">
                             <button
                               onClick={() => {
-                                setBniTransactions((prev) => {
-                                  const updated = prev.filter((t) => t.id !== tx.id);
-                                  void saveBniTransactions(updated);
-                                  const adjustedAmount = tx.type === "in" ? -tx.amount : tx.amount;
-                                  setBniBalance(prev => prev + adjustedAmount);
-                                  return updated;
-                                });
+                                if (window.confirm("Yakin ingin menghapus transaksi SeaBank ini?")) {
+                                  const updated = seabankTransactions.filter((t) => t.id !== tx.id);
+                                  setSeabankTransactions(updated);
+                                  const newBalance = updated.reduce((acc, t) => acc + (t.type === "in" ? t.amount : -t.amount), 0);
+                                  setSeabankBalance(newBalance);
+                                  void saveSeabankTransactions(updated);
+                                }
                               }}
                               className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-slate-600 rounded"
                             >
@@ -1002,24 +1348,25 @@ export default function Home() {
             </div>
           )}
 
-          {activeTab === "ikan-history" && (
+          {/* TAB 4: RIWAYAT TABUNGAN BNI */}
+          {activeTab === "bni-history" && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
               <Card className="border-teal-200 dark:border-teal-900/50">
                 <div className="mb-4 flex items-center gap-2">
                   <div className="p-2 rounded-lg bg-teal-100 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400">
-                    <Fish size={20} />
+                    <Building2 size={20} />
                   </div>
-                  <h3 className="font-bold text-lg">Riwayat TABUNGAN IKAN</h3>
+                  <h3 className="font-bold text-lg">Riwayat TABUNGAN BNI</h3>
                 </div>
 
-                {ikanTransactions.length === 0 ? (
+                {bniTransactions.length === 0 ? (
                   <div className="text-center py-10 text-slate-400">
                     <History size={48} className="mx-auto mb-3 opacity-20" />
-                    <p>Belum ada transaksi TABUNGAN IKAN tercatat.</p>
+                    <p>Belum ada transaksi TABUNGAN BNI tercatat.</p>
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {[...ikanTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((tx) => (
+                    {[...bniTransactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((tx) => (
                       <div
                         key={tx.id}
                         className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 border border-transparent hover:border-slate-200 dark:hover:border-slate-700 transition-all group"
@@ -1038,7 +1385,12 @@ export default function Home() {
                             <p className="font-medium text-slate-800 dark:text-slate-200">
                               {tx.description || "Tanpa Keterangan"}
                             </p>
-                            <p className="text-xs text-slate-500 mt-1">{tx.date}</p>
+                            <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
+                              <span className="px-2 py-0.5 rounded-md bg-teal-600 text-white bg-opacity-80">
+                                TABUNGAN BNI
+                              </span>
+                              <span>• {tx.date}</span>
+                            </div>
                           </div>
                         </div>
 
@@ -1052,13 +1404,19 @@ export default function Home() {
                           </span>
                           <div className="flex gap-1 opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
+                              onClick={() => handleEditBniTransaction(tx)}
+                              className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-slate-600 rounded"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
                               onClick={() => {
-                                if (window.confirm("Yakin ingin menghapus transaksi IKAN ini?")) {
-                                  const updated = ikanTransactions.filter((t) => t.id !== tx.id);
-                                  setIkanTransactions(updated);
+                                if (window.confirm("Yakin ingin menghapus transaksi BNI ini?")) {
+                                  const updated = bniTransactions.filter((t) => t.id !== tx.id);
+                                  setBniTransactions(updated);
                                   const newBalance = updated.reduce((acc, t) => acc + (t.type === "in" ? t.amount : -t.amount), 0);
-                                  setIkanBalance(newBalance);
-                                  void saveIkanTransactions(updated);
+                                  setBniBalance(newBalance);
+                                  void saveBniTransactions(updated);
                                 }
                               }}
                               className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-slate-600 rounded"
@@ -1076,6 +1434,7 @@ export default function Home() {
           )}
         </main>
 
+        {/* MODAL 1: TRANSAKSI KATEGORI */}
         {isTxModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden scale-100 animate-in zoom-in-95 duration-200">
@@ -1113,16 +1472,12 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Pilih Tabungan</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Pos Tabungan</label>
                   <select
-                    required
                     value={txForm.categoryId}
                     onChange={(e) => setTxForm({ ...txForm, categoryId: Number(e.target.value) })}
                     className="w-full p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   >
-                    <option value="" disabled>
-                      -- Pilih Kategori --
-                    </option>
                     {categories.map((cat) => (
                       <option key={cat.id} value={cat.id}>
                         {cat.name}
@@ -1132,12 +1487,13 @@ export default function Home() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nominal (Rp)</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Jumlah Saldo</label>
                   <div className="relative">
-                    <span className="absolute left-3 top-3 text-slate-500 font-bold">Rp</span>
+                    <span className="absolute left-3 top-3 text-slate-500 font-bold text-lg">Rp</span>
                     <input
                       type="text"
                       inputMode="numeric"
+                      autoFocus
                       required
                       placeholder="0"
                       value={txForm.amount ? new Intl.NumberFormat("id-ID").format(Number(txForm.amount)) : ""}
@@ -1145,13 +1501,13 @@ export default function Home() {
                         const val = e.target.value.replace(/\D/g, "");
                         setTxForm({ ...txForm, amount: val });
                       }}
-                      className="w-full pl-10 p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono text-lg"
+                      className="w-full pl-9 p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-blue-500 focus:outline-none text-lg font-semibold"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Keterangan</label>
                     <input
                       type="text"
@@ -1186,50 +1542,32 @@ export default function Home() {
           </div>
         )}
 
-        {isBniModalOpen && (
+        {/* MODAL 2: SEABANK MODAL */}
+        {isSeabankModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden scale-100 animate-in zoom-in-95 duration-200">
               <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-r from-orange-500 to-orange-600 flex justify-between items-center">
-                <h3 className="font-bold text-lg text-white">Tambah Saldo TABUNGAN BNI</h3>
-                <button onClick={() => setIsBniModalOpen(false)} className="text-white/80 hover:text-white">
+                <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                  <Landmark size={20} /> {editingSeabankTx ? "Edit Transaksi TABUNGAN SEABANK" : "Tambah Saldo TABUNGAN SEABANK"}
+                </h3>
+                <button
+                  onClick={() => {
+                    setIsSeabankModalOpen(false);
+                    setEditingSeabankTx(null);
+                  }}
+                  className="text-white/80 hover:text-white"
+                >
                   <X size={20} />
                 </button>
               </div>
 
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const amount = Number(bniAmountInput.replace(/\D/g, ""));
-                  if (amount > 0) {
-                    const newBniTx: BNITransaction = {
-                      id: Math.max(0, ...bniTransactions.map(tx => tx.id)) + 1,
-                      amount,
-                      type: bniForm.type,
-                      date: bniForm.date,
-                      description: bniForm.description,
-                    };
-                    
-                    setBniTransactions((prev) => {
-                      const updated = [newBniTx, ...prev];
-                      void saveBniTransactions(updated);
-                      return updated;
-                    });
-                    
-                    const adjustedAmount = bniForm.type === "in" ? amount : -amount;
-                    setBniBalance(prev => prev + adjustedAmount);
-                    setIsBniModalOpen(false);
-                    setBniAmountInput("");
-                    setBniForm({ type: "in", description: "", date: new Date().toISOString().split("T")[0] });
-                  }
-                }}
-                className="p-6 space-y-4"
-              >
+              <form onSubmit={handleSaveSeabankTransaction} className="p-6 space-y-4">
                 <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-lg">
                   <button
                     type="button"
-                    onClick={() => setBniForm({ ...bniForm, type: "in" })}
+                    onClick={() => setSeabankForm({ ...seabankForm, type: "in" })}
                     className={`py-2 rounded-md text-sm font-medium transition-all ${
-                      bniForm.type === "in"
+                      seabankForm.type === "in"
                         ? "bg-white dark:bg-slate-600 shadow text-green-600 dark:text-green-400"
                         : "text-slate-500"
                     }`}
@@ -1238,9 +1576,9 @@ export default function Home() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setBniForm({ ...bniForm, type: "out" })}
+                    onClick={() => setSeabankForm({ ...seabankForm, type: "out" })}
                     className={`py-2 rounded-md text-sm font-medium transition-all ${
-                      bniForm.type === "out"
+                      seabankForm.type === "out"
                         ? "bg-white dark:bg-slate-600 shadow text-red-600 dark:text-red-400"
                         : "text-slate-500"
                     }`}
@@ -1259,10 +1597,10 @@ export default function Home() {
                       autoFocus
                       required
                       placeholder="0"
-                      value={bniAmountInput ? new Intl.NumberFormat("id-ID").format(Number(bniAmountInput.replace(/\D/g, ""))) : ""}
+                      value={seabankAmountInput ? new Intl.NumberFormat("id-ID").format(Number(seabankAmountInput.replace(/\D/g, ""))) : ""}
                       onChange={(e) => {
                         const val = e.target.value.replace(/\D/g, "");
-                        setBniAmountInput(val);
+                        setSeabankAmountInput(val);
                       }}
                       className="w-full pl-9 p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-orange-500 focus:outline-none text-lg font-semibold"
                     />
@@ -1273,9 +1611,9 @@ export default function Home() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Keterangan</label>
                   <input
                     type="text"
-                    placeholder="Contoh: Gaji Bulanan"
-                    value={bniForm.description}
-                    onChange={(e) => setBniForm({ ...bniForm, description: e.target.value })}
+                    placeholder="Contoh: Gaji Bulanan / Transfer SeaBank"
+                    value={seabankForm.description}
+                    onChange={(e) => setSeabankForm({ ...seabankForm, description: e.target.value })}
                     className="w-full p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-orange-500 focus:outline-none"
                   />
                 </div>
@@ -1285,14 +1623,21 @@ export default function Home() {
                   <input
                     type="date"
                     required
-                    value={bniForm.date}
-                    onChange={(e) => setBniForm({ ...bniForm, date: e.target.value })}
+                    value={seabankForm.date}
+                    onChange={(e) => setSeabankForm({ ...seabankForm, date: e.target.value })}
                     className="w-full p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-orange-500 focus:outline-none"
                   />
                 </div>
 
                 <div className="flex gap-3 pt-2">
-                  <Button variant="outline" onClick={() => setIsBniModalOpen(false)} className="flex-1">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setIsSeabankModalOpen(false);
+                      setEditingSeabankTx(null);
+                    }}
+                    className="flex-1"
+                  >
                     Batal
                   </Button>
                   <Button variant="primary" type="submit" className="flex-1 bg-orange-600 hover:bg-orange-700">
@@ -1304,6 +1649,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* MODAL 3: KATEGORI MODAL */}
         {isCatModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-2xl shadow-2xl p-6 scale-100 animate-in zoom-in-95 duration-200">
@@ -1353,63 +1699,53 @@ export default function Home() {
           </div>
         )}
 
-        {isIkanModalOpen && (
+        {/* MODAL 4: BNI MODAL (formerly IKAN MODAL) */}
+        {isBniModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-2xl shadow-2xl p-6 scale-100 animate-in zoom-in-95 duration-200">
-              <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-teal-600 dark:text-teal-400">
-                <Fish size={20} /> Transaksi TABUNGAN IKAN
-              </h3>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!ikanAmountInput) return;
-                  const newTx: BNITransaction = {
-                    id: Date.now(), // simple unique id
-                    amount: Number(ikanAmountInput.replace(/\D/g, "")),
-                    type: ikanForm.type,
-                    description: ikanForm.description,
-                    date: ikanForm.date,
-                  };
-                  const updated = [newTx, ...ikanTransactions];
-                  setIkanTransactions(updated);
-                  const newBalance = updated.reduce((acc, tx) => acc + (tx.type === "in" ? tx.amount : -tx.amount), 0);
-                  setIkanBalance(newBalance);
-                  void saveIkanTransactions(updated);
-                  setIsIkanModalOpen(false);
-                  setIkanForm({ type: "in", description: "", date: new Date().toISOString().split("T")[0] });
-                }}
-                className="space-y-4"
-              >
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Jenis</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setIkanForm({ ...ikanForm, type: "in" })}
-                      className={`p-2 rounded-lg border font-medium flex items-center justify-center gap-2 transition-all ${
-                        ikanForm.type === "in"
-                          ? "bg-teal-50 border-teal-500 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300"
-                          : "border-slate-200 dark:border-slate-700 text-slate-500"
-                      }`}
-                    >
-                      <Plus size={16} /> Setor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIkanForm({ ...ikanForm, type: "out" })}
-                      className={`p-2 rounded-lg border font-medium flex items-center justify-center gap-2 transition-all ${
-                        ikanForm.type === "out"
-                          ? "bg-red-50 border-red-500 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                          : "border-slate-200 dark:border-slate-700 text-slate-500"
-                      }`}
-                    >
-                      <Minus size={16} /> Tarik
-                    </button>
-                  </div>
+            <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden scale-100 animate-in zoom-in-95 duration-200">
+              <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-r from-teal-600 to-teal-700 flex justify-between items-center">
+                <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                  <Building2 size={20} /> {editingBniTx ? "Edit Transaksi TABUNGAN BNI" : "Tambah Saldo TABUNGAN BNI"}
+                </h3>
+                <button
+                  onClick={() => {
+                    setIsBniModalOpen(false);
+                    setEditingBniTx(null);
+                  }}
+                  className="text-white/80 hover:text-white"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveBniTransaction} className="p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 dark:bg-slate-700 rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setBniForm({ ...bniForm, type: "in" })}
+                    className={`py-2 rounded-md text-sm font-medium transition-all ${
+                      bniForm.type === "in"
+                        ? "bg-white dark:bg-slate-600 shadow text-green-600 dark:text-green-400"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    Pemasukan (+)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBniForm({ ...bniForm, type: "out" })}
+                    className={`py-2 rounded-md text-sm font-medium transition-all ${
+                      bniForm.type === "out"
+                        ? "bg-white dark:bg-slate-600 shadow text-red-600 dark:text-red-400"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    Pengeluaran (-)
+                  </button>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Jumlah</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Jumlah Saldo</label>
                   <div className="relative">
                     <span className="absolute left-3 top-3 text-slate-500 font-bold text-lg">Rp</span>
                     <input
@@ -1418,10 +1754,10 @@ export default function Home() {
                       autoFocus
                       required
                       placeholder="0"
-                      value={ikanAmountInput ? new Intl.NumberFormat("id-ID").format(Number(ikanAmountInput.replace(/\D/g, ""))) : ""}
+                      value={bniAmountInput ? new Intl.NumberFormat("id-ID").format(Number(bniAmountInput.replace(/\D/g, ""))) : ""}
                       onChange={(e) => {
                         const val = e.target.value.replace(/\D/g, "");
-                        setIkanAmountInput(val);
+                        setBniAmountInput(val);
                       }}
                       className="w-full pl-9 p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-teal-500 focus:outline-none text-lg font-semibold"
                     />
@@ -1432,9 +1768,9 @@ export default function Home() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Keterangan</label>
                   <input
                     type="text"
-                    placeholder="Contoh: Panen Lele"
-                    value={ikanForm.description}
-                    onChange={(e) => setIkanForm({ ...ikanForm, description: e.target.value })}
+                    placeholder="Contoh: Setor Tabungan BNI"
+                    value={bniForm.description}
+                    onChange={(e) => setBniForm({ ...bniForm, description: e.target.value })}
                     className="w-full p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-teal-500 focus:outline-none"
                   />
                 </div>
@@ -1444,14 +1780,21 @@ export default function Home() {
                   <input
                     type="date"
                     required
-                    value={ikanForm.date}
-                    onChange={(e) => setIkanForm({ ...ikanForm, date: e.target.value })}
+                    value={bniForm.date}
+                    onChange={(e) => setBniForm({ ...bniForm, date: e.target.value })}
                     className="w-full p-3 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 focus:ring-2 focus:ring-teal-500 focus:outline-none"
                   />
                 </div>
 
                 <div className="flex gap-3 pt-2">
-                  <Button variant="outline" onClick={() => setIsIkanModalOpen(false)} className="flex-1">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setIsBniModalOpen(false);
+                      setEditingBniTx(null);
+                    }}
+                    className="flex-1"
+                  >
                     Batal
                   </Button>
                   <Button variant="primary" type="submit" className="flex-1 bg-teal-600 hover:bg-teal-700">
@@ -1463,6 +1806,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* MODAL 5: SEARCH */}
         {isSearchModalOpen && (
           <div className="fixed inset-0 z-50 flex flex-col items-center p-4 pt-[10vh] bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white dark:bg-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh] scale-100 animate-in zoom-in-95 duration-200">
